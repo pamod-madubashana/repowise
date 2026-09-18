@@ -8,6 +8,10 @@
  * think it does not. The document leads because it is the file the reader
  * opens; putting the target first would read as a list of broken code files,
  * which is the opposite of what a finding says.
+ *
+ * A row opens the detail panel rather than navigating. The evidence that makes
+ * a finding actionable does not fit in a row, and the document's own file page
+ * cannot show it either.
  */
 
 import { FileText } from "lucide-react";
@@ -22,12 +26,16 @@ import {
   type ResponsiveColumn,
 } from "../shared/responsive-table";
 import { EmptyState } from "../shared/empty-state";
+import { AiPromptButton } from "../health/ai-prompt-button";
 
 export interface DriftFindingsTableProps {
   findings: DocDriftFinding[];
-  /** Where a document link goes; the row is clickable when given. */
-  documentHref: (path: string, line?: number) => string;
-  navigate?: ((href: string) => void) | undefined;
+  /** Open one finding's detail. The row is clickable when given. */
+  onSelect: (finding: DocDriftFinding) => void;
+  /** Hand one finding to an agent, from the row itself. */
+  onPrompt: (finding: DocDriftFinding) => void;
+  /** Which row the open panel is describing. */
+  selectedId?: string | null | undefined;
 }
 
 /**
@@ -49,13 +57,10 @@ const TIER_LABEL: Record<string, string> = {
 
 export function DriftFindingsTable({
   findings,
-  documentHref,
-  navigate,
+  onSelect,
+  onPrompt,
+  selectedId,
 }: DriftFindingsTableProps) {
-  const open = (finding: DocDriftFinding) => {
-    navigate?.(documentHref(finding.file_path, finding.line_number));
-  };
-
   const columns: ResponsiveColumn<DocDriftFinding>[] = [
     {
       key: "document",
@@ -127,6 +132,22 @@ export function DriftFindingsTable({
         );
       },
     },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      priority: 1,
+      cellClassName: "whitespace-nowrap",
+      // The button stops its own propagation, so it is safe inside a row that
+      // also opens the panel.
+      render: (f) => (
+        <AiPromptButton
+          variant="icon"
+          onClick={() => onPrompt(f)}
+          label={`Fix ${f.file_path}:${f.line_number} with an agent`}
+        />
+      ),
+    },
   ];
 
   return (
@@ -136,12 +157,9 @@ export function DriftFindingsTable({
       rowKey={(f) => f.id}
       stacked="md"
       caption="Documentation assertions the repository no longer satisfies"
-      {...(navigate
-        ? {
-            onRowClick: open,
-            rowClassName: () => "cursor-pointer",
-          }
-        : {})}
+      onRowClick={onSelect}
+      rowClassName={() => "cursor-pointer"}
+      selectedKey={selectedId ?? null}
       empty={
         <EmptyState
           icon={<FileText className="h-6 w-6" />}

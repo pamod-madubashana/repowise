@@ -23,6 +23,9 @@ vi.stubGlobal("ResizeObserver", RO);
  * pick one. jsdom applies no CSS, so a cell matches in both; scope by caption.
  */
 const TABLE = { name: /Documentation assertions/i };
+/** The detail panel and the prompt modal are both dialogs; name tells them apart. */
+const PANEL = /docs\/architecture\.md:42/;
+const PROMPT = /Documentation fix prompt/i;
 
 const BASIS =
   "Covers only references this detector can resolve; uncheckable ones are neither counted nor reported.";
@@ -39,7 +42,11 @@ const FINDINGS: DocDriftFinding[] = [
     reason: "No file matches this path.",
     raw: "src/auth.py",
     context: "The resolver lives in src/auth.py.",
-    evidence: [],
+    evidence: [
+      "docs/architecture.md:42 states `src/auth.py`",
+      "resolution: no-candidate",
+      "under: Architecture > Resolvers",
+    ],
   },
   {
     id: "f2",
@@ -313,17 +320,94 @@ describe("DocDriftView", () => {
     expect(await screen.findByText("Sign in to see this")).toBeTruthy();
   });
 
-  it("opens the document, not the file it names", async () => {
+  it("opens the detail panel rather than navigating away", async () => {
+    // The row used to jump to the document's file page, which for a markdown
+    // file renders an empty shell: no symbols, no edges, none of the evidence.
     const navigate = vi.fn();
     renderView(<DocDriftView adapter={makeAdapter({ navigate })} />);
 
     const table = await screen.findByRole("table", TABLE);
     fireEvent.click(within(table).getByText(/docs\/architecture\.md/));
 
+    expect(await screen.findByRole("dialog", { name: PANEL })).toBeTruthy();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("shows the evidence the row has no room for", async () => {
+    renderView(<DocDriftView adapter={makeAdapter()} />);
+    const table = await screen.findByRole("table", TABLE);
+    fireEvent.click(within(table).getByText(/docs\/architecture\.md/));
+
+    // The line as written, the heading trail and the resolver's trace all
+    // arrive with every finding and were previously discarded.
+    expect(await screen.findByText(/The resolver lives in src\/auth\.py\./)).toBeTruthy();
+    expect(screen.getByText("Architecture > Resolvers")).toBeTruthy();
+    expect(screen.getByText(/resolution: no-candidate/)).toBeTruthy();
+  });
+
+  it("repeats what a finding does and does not claim where the action is", async () => {
+    renderView(<DocDriftView adapter={makeAdapter()} />);
+    const table = await screen.findByRole("table", TABLE);
+    fireEvent.click(within(table).getByText(/docs\/architecture\.md/));
+
+    const panel = await screen.findByRole("dialog", { name: PANEL });
+    expect(within(panel).getByText(new RegExp(BASIS.slice(0, 40)))).toBeTruthy();
+  });
+
+  it("reaches the document from the panel, not from the row", async () => {
+    const navigate = vi.fn();
+    renderView(<DocDriftView adapter={makeAdapter({ navigate })} />);
+    const table = await screen.findByRole("table", TABLE);
+    fireEvent.click(within(table).getByText(/docs\/architecture\.md/));
+
+    fireEvent.click(await screen.findByRole("link", { name: /Open document/i }));
     await waitFor(() =>
       expect(navigate).toHaveBeenCalledWith(
         "/repos/repo-1/files/docs/architecture.md#L42",
       ),
     );
+  });
+
+  it("hands one finding to an agent from its row", async () => {
+    renderView(<DocDriftView adapter={makeAdapter()} />);
+    const table = await screen.findByRole("table", TABLE);
+
+    fireEvent.click(
+      within(table).getByRole("button", {
+        name: /Fix docs\/architecture\.md:42 with an agent/i,
+      }),
+    );
+
+    expect(await screen.findByRole("dialog", { name: PROMPT })).toBeTruthy();
+    // Only one: the row button stops propagation, so the row's own click
+    // handler never runs and the detail panel stays shut.
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("builds a prompt naming the document as the thing to edit", async () => {
+    renderView(<DocDriftView adapter={makeAdapter()} />);
+    const table = await screen.findByRole("table", TABLE);
+    fireEvent.click(
+      within(table).getByRole("button", {
+        name: /Fix docs\/architecture\.md:42 with an agent/i,
+      }),
+    );
+
+    const prompt = (await screen.findByRole("dialog", { name: PROMPT })).textContent ?? "";
+    // The direction of the claim is the one thing this prompt must not invert.
+    expect(prompt).toContain("`docs/architecture.md:42` claims `src/auth.py` exists");
+    expect(prompt).toContain("Edit the document, not the code.");
+    // And it has to leave room for a deliberate example to be correct.
+    expect(prompt).toContain("Some findings are correct as written.");
+  });
+
+  it("can hand the whole slice over at once", async () => {
+    renderView(<DocDriftView adapter={makeAdapter()} />);
+    await screen.findByRole("table", TABLE);
+
+    fireEvent.click(screen.getByRole("button", { name: /Fix 2 with an agent/i }));
+    const prompt = (await screen.findByRole("dialog", { name: PROMPT })).textContent ?? "";
+    expect(prompt).toContain("docs/architecture.md:42");
+    expect(prompt).toContain("docs/cli.md:7");
   });
 });

@@ -47,7 +47,10 @@ export interface DocDriftAdapter {
    */
   listReferences?(target: string): Promise<DocDriftReferencesResponse>;
 
-  /** Navigate to an href (host wires this to its router). Optional: a host
-   *  whose document links are plain anchors does not need it. */
+  /**
+   * Navigate to an href (host wires this to its router). Optional: the
+   * document link is a real anchor either way, so a host without a router
+   * still gets a working link, just a full page load.
+   */
   navigate?(href: string): void;
 }

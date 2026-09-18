@@ -29,6 +29,7 @@ import { FileCheck2 } from "lucide-react";
 import {
   DOC_DRIFT_CONFIDENCE,
   docDriftKindLabel,
+  type DocDriftFinding,
   type DocDriftResponse,
 } from "@repowise-dev/types/doc-drift";
 
@@ -38,9 +39,14 @@ import { EmptyState } from "../shared/empty-state";
 import { OverviewSection } from "../overview/section";
 import { toFriendlyMessage } from "../lib/errors";
 
+import { AiPromptButton } from "../health/ai-prompt-button";
+import { AiPromptModal } from "../health/ai-prompt-modal";
+import { buildDocDriftAiPrompt } from "../health/ai-prompt-builder";
+
 import { DocDriftLede } from "./doc-drift-lede";
 import { DriftFindingsTable } from "./drift-findings-table";
 import { DocDriftUnavailableState } from "./doc-drift-unavailable";
+import { DocDriftDetailPanel } from "./doc-drift-detail-panel";
 import type { DocDriftAdapter } from "./doc-drift-adapter";
 
 /**
@@ -84,6 +90,12 @@ export function DocDriftView({
     DOC_DRIFT_CONFIDENCE.MEDIUM,
   );
   const [kind, setKind] = useState<string>("");
+  /** The finding the detail panel is describing. */
+  const [selected, setSelected] = useState<DocDriftFinding | null>(null);
+  /** The findings handed to the prompt modal; null when it is closed. */
+  const [promptFindings, setPromptFindings] = useState<DocDriftFinding[] | null>(
+    null,
+  );
 
   const { data, isLoading, error, mutate } = useSWR<DocDriftResponse>(
     `doc-drift:${adapter.cacheKey}:${minConfidence}:${kind}`,
@@ -172,13 +184,21 @@ export function DocDriftView({
           title="Drifted assertions"
           description="Each row names the document to edit and the line to edit it on. It does not claim the document describes the file it names, only that the file is no longer there."
           action={
-            <Filters
-              minConfidence={minConfidence}
-              onMinConfidence={setMinConfidence}
-              kind={kind}
-              onKind={setKind}
-              kinds={kinds}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              {data.findings.length > 0 && (
+                <AiPromptButton
+                  onClick={() => setPromptFindings(data.findings)}
+                  label={`Fix ${data.findings.length} with an agent`}
+                />
+              )}
+              <Filters
+                minConfidence={minConfidence}
+                onMinConfidence={setMinConfidence}
+                kind={kind}
+                onKind={setKind}
+                kinds={kinds}
+              />
+            </div>
           }
         >
           {error ? (
@@ -199,11 +219,43 @@ export function DocDriftView({
           )}
           <DriftFindingsTable
             findings={data.findings}
-            documentHref={adapter.documentHref}
-            navigate={adapter.navigate}
+            onSelect={setSelected}
+            onPrompt={(finding) => setPromptFindings([finding])}
+            selectedId={selected?.id ?? null}
           />
         </OverviewSection>
       )}
+
+      <DocDriftDetailPanel
+        finding={selected}
+        onOpenChange={(open) => !open && setSelected(null)}
+        documentHref={adapter.documentHref}
+        onPrompt={(finding) => setPromptFindings([finding])}
+        navigate={adapter.navigate}
+        basis={summary.findings_basis}
+      />
+
+      <AiPromptModal
+        open={promptFindings !== null}
+        onOpenChange={(open) => !open && setPromptFindings(null)}
+        title="Documentation fix prompt"
+        description="Hand the drifted assertion, its evidence and the constraints to an agent."
+        filePath={
+          promptFindings?.length === 1
+            ? `${promptFindings[0]!.file_path}:${promptFindings[0]!.line_number}`
+            : null
+        }
+        getPrompt={
+          promptFindings
+            ? (flavor) =>
+                buildDocDriftAiPrompt({
+                  findings: promptFindings,
+                  flavor,
+                  basis: summary.findings_basis,
+                })
+            : null
+        }
+      />
     </div>
   );
 }
