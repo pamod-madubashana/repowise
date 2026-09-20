@@ -942,6 +942,11 @@ def resolve_provider(
       2. ``REPOWISE_PROVIDER`` env var
       3. ``.repowise/config.yaml`` (written by ``repowise init``)
       4. Auto-detect from API key env vars
+
+    Model resolution order (when ``model`` is None):
+      1. ``REPOWISE_MODEL`` env var
+      2. ``.repowise/config.yaml`` ``model:`` (issue #416)
+      3. Provider hardcoded default
     """
     from repowise.core.providers import get_provider
     from repowise.core.providers.llm.registry import (
@@ -967,6 +972,11 @@ def resolve_provider(
         provider_name = cfg["provider"]
 
     # Honor the config model regardless of how the provider was resolved (#416).
+    # REPOWISE_MODEL env var takes precedence over config.yaml (#2264),
+    # matching the documented override order and resolve_reasoning's
+    # explicit > env > config precedence.
+    if model is None:
+        model = (os.environ.get("REPOWISE_MODEL") or "").strip() or None
     if model is None and cfg.get("model"):
         model = cfg["model"]
 
