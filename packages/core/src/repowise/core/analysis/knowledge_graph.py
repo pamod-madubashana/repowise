@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from repowise.core.generation.entry_points import orientation_entry_points
-from repowise.core.support_paths import CONFIG_EXTENSIONS, DOC_EXTENSIONS
+from repowise.core.support_paths import CONFIG_EXTENSIONS, DOC_EXTENSIONS, classification_token
 
 _log = logging.getLogger(__name__)
 
@@ -169,9 +169,9 @@ def _classify_file_type(path: str, language: str, is_config: bool) -> str:
     ext = p.suffix.lower()
     stem = p.stem.lower()
 
-    # Dotfiles such as ``.env`` report an empty suffix via ``pathlib``, so
-    # match the basename too (mirrors ``support_paths.is_doc_or_config_path``).
-    if is_config or ext in _CONFIG_EXTENSIONS or p.name.lower() in _CONFIG_EXTENSIONS:
+    # `classification_token` covers dotfiles: `.env` has no suffix, so the
+    # suffix-only check below never matched the entry that names it (#2379).
+    if is_config or classification_token(path) in _CONFIG_EXTENSIONS:
         return "config"
     # Infra names only count for extension-less files (Dockerfile, Makefile)
     # or when ingestion parsed the file as an infra language — a Python module
