@@ -350,7 +350,7 @@ class TestUpdateLock:
 
         The other half of the contract, and the half nothing asserted. Without
         it, a test could name a PID that merely happens to be dead on the
-        machine running it and read as if it were testing age — which is
+        machine running it and read as if it were testing age â which is
         exactly what `pid: 1` did: absent on Windows, always alive on Linux, so
         the same assertion meant opposite things on the two platforms.
 
@@ -643,6 +643,7 @@ class TestResolveProviderConfigModel:
             "repowise.cli.helpers.validate_provider_config", lambda *_args, **_kw: []
         )
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+        monkeypatch.delenv("REPOWISE_MODEL", raising=False)
         return captured
 
     def test_config_model_used_when_provider_from_env(self, monkeypatch, tmp_path):
@@ -679,7 +680,92 @@ class TestResolveProviderConfigModel:
 
 
 # ---------------------------------------------------------------------------
-# Update queued / pending markers — coalescing primitives that prevent the
+# Provider model resolution from REPOWISE_MODEL env var (issue #2264)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveProviderModelEnv:
+    """REPOWISE_MODEL env var must be honored when no --model is passed,
+    matching the documented override order and resolve_reasoning's
+    explicit > env > config precedence."""
+
+    @staticmethod
+    def _capture_no_config(monkeypatch) -> dict[str, Any]:
+        captured: dict[str, Any] = {}
+
+        def fake_get_provider(name: str, **kwargs: Any):
+            captured["name"] = name
+            captured["kwargs"] = kwargs
+            return "provider"
+
+        monkeypatch.setattr("repowise.core.providers.get_provider", fake_get_provider)
+        monkeypatch.setattr(
+            "repowise.cli.helpers.validate_provider_config", lambda *_args, **_kw: []
+        )
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+        return captured
+
+    def test_env_model_beats_config(self, monkeypatch, tmp_path):
+        """REPOWISE_MODEL takes precedence over config.yaml model."""
+        import yaml
+
+        captured = self._capture_no_config(monkeypatch)
+        (ensure_repowise_dir(tmp_path) / CONFIG_FILENAME).write_text(
+            yaml.dump({"model": "config/old-model"}, default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("REPOWISE_MODEL", "openrouter/new-model")
+
+        assert resolve_provider(None, None, repo_path=tmp_path) == "provider"
+        assert captured.get("kwargs", {}).get("model") == "openrouter/new-model"
+
+    def test_empty_env_falls_through_to_config(self, monkeypatch, tmp_path):
+        """Whitespace-only REPOWISE_MODEL is treated as unset."""
+        import yaml
+
+        captured = self._capture_no_config(monkeypatch)
+        (ensure_repowise_dir(tmp_path) / CONFIG_FILENAME).write_text(
+            yaml.dump({"model": "config/fallback"}, default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("REPOWISE_MODEL", "   ")
+
+        assert resolve_provider(None, None, repo_path=tmp_path) == "provider"
+        assert captured.get("kwargs", {}).get("model") == "config/fallback"
+
+    def test_explicit_model_beats_env(self, monkeypatch, tmp_path):
+        """Explicit --model argument takes precedence over REPOWISE_MODEL."""
+        captured = self._capture_no_config(monkeypatch)
+        monkeypatch.setenv("REPOWISE_MODEL", "openrouter/env-model")
+
+        assert resolve_provider(None, "anthropic/claude-opus-4", repo_path=tmp_path)
+        assert captured.get("kwargs", {}).get("model") == "anthropic/claude-opus-4"
+
+    def test_env_model_used_when_no_config(self, monkeypatch, tmp_path):
+        """REPOWISE_MODEL is used when config.yaml has no model."""
+        captured = self._capture_no_config(monkeypatch)
+        monkeypatch.setenv("REPOWISE_MODEL", "openrouter/env-model")
+
+        assert resolve_provider(None, None, repo_path=tmp_path) == "provider"
+        assert captured.get("kwargs", {}).get("model") == "openrouter/env-model"
+
+    def test_unset_env_config_model_still_works(self, monkeypatch, tmp_path):
+        """When REPOWISE_MODEL is not set, config.yaml model is used (#416)."""
+        import yaml
+
+        captured = self._capture_no_config(monkeypatch)
+        monkeypatch.delenv("REPOWISE_MODEL", raising=False)
+        (ensure_repowise_dir(tmp_path) / CONFIG_FILENAME).write_text(
+            yaml.dump({"model": "config/preserved"}, default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        assert resolve_provider(None, None, repo_path=tmp_path) == "provider"
+        assert captured.get("kwargs", {}).get("model") == "config/preserved"
+
+
+# ---------------------------------------------------------------------------
+# Update queued / pending markers â coalescing primitives that prevent the
 # post-commit hook from spawning N concurrent updates on rapid-fire commits.
 # ---------------------------------------------------------------------------
 
@@ -880,7 +966,7 @@ class TestResolveProviderOrPrompt:
     @pytest.mark.parametrize("exc_name", ["EOFError", "Abort"])
     def test_unanswerable_prompt_falls_back_to_clean_error(self, tmp_path, monkeypatch, exc_name):
         """A tty that lies: the prompt hits EOF/Abort, so we surface the clean
-        actionable error instead of a bare 'Aborted!' — the agent-safe path."""
+        actionable error instead of a bare 'Aborted!' â the agent-safe path."""
         import click
 
         from repowise.cli import helpers
