@@ -133,9 +133,13 @@ def _spawn_flusher() -> bool:
         "cwd": os.getcwd(),
     }
     if os.name == "nt":
-        # DETACHED_PROCESS | CREATE_NO_WINDOW: no console window flashes up
-        # in front of the user between commands.
-        kwargs["creationflags"] = 0x00000008 | 0x08000000
+        # CREATE_NO_WINDOW alone: no console window flashes up
+        # in front of the user between commands. Do NOT add DETACHED_PROCESS
+        # here — Microsoft documents that CREATE_NO_WINDOW is ignored when
+        # combined with DETACHED_PROCESS, which leaves a console app with no
+        # console to inherit and Windows gives it a new visible one (the flash).
+        # A Windows child outlives its parent without DETACHED_PROCESS.
+        kwargs["creationflags"] = 0x08000000
         try:
             if hasattr(subprocess, "STARTUPINFO"):
                 startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
