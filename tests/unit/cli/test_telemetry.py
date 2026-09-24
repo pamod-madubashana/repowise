@@ -577,7 +577,8 @@ class TestSpawnFlusherFlags:
         result = emitter._spawn_flusher()
 
         assert result is True
-        assert captured_kwargs.get("creationflags") == 0x00000008 | 0x08000000
+        # CREATE_NO_WINDOW alone; adding DETACHED_PROCESS would disable it.
+        assert captured_kwargs.get("creationflags") == 0x08000000
         assert "startupinfo" in captured_kwargs
         startupinfo = captured_kwargs["startupinfo"]
         assert startupinfo.dwFlags & 0x00000001  # STARTF_USESHOWWINDOW
