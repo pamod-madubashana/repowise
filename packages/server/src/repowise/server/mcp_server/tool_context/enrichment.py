@@ -27,12 +27,14 @@ from repowise.core.analysis.doc_drift.serialize import (
     collapse_reference_sites,
     documents_with_drift,
 )
+from repowise.core.analysis.finding_registry import excluded_types
 from repowise.core.analysis.health.signals import file_signals
 from repowise.core.ingestion.models import (
     FILE_DEPENDENCY_EDGE_TYPES,
     SYMBOL_USE_EDGE_TYPES,
 )
 from repowise.core.persistence.crud import (
+    coverage_row_dict,
     doc_drift_references_stored,
     get_all_file_metrics,
     get_community_members,
@@ -44,10 +46,10 @@ from repowise.core.persistence.crud import (
     get_graph_node,
     get_graph_nodes_by_ids,
     get_node_degree_counts,
+    load_coverage_for_repo,
     serialize_doc_drift_reference_row,
 )
 from repowise.core.persistence.models import (
-    CoverageFile,
     GraphEdge,
     GraphNode,
     HealthFileMetric,
@@ -694,6 +696,7 @@ async def _resolve_health(
             HealthFinding.repository_id == repo_id,
             HealthFinding.file_path == file_path,
             HealthFinding.status == "open",
+            HealthFinding.biomarker_type.not_in(excluded_types()),
         )
         .order_by(HealthFinding.health_impact.desc())
         .limit(2)
@@ -704,21 +707,18 @@ async def _resolve_health(
         {
             "biomarker_type": f.biomarker_type,
             "severity": f.severity,
-            "function_name": f.function_name,
+            # Absent rather than null on a file-level biomarker, same as the
+            # identical field on get_risk's cards.
+            **({"function_name": f.function_name} if f.function_name else {}),
             "impact": round(f.health_impact, 2),
             "suggestion": suggestion_for(f.biomarker_type),
         }
         for f in findings_res.scalars().all()
     ]
 
-    coverage_row = (
-        await session.execute(
-            select(CoverageFile).where(
-                CoverageFile.repository_id == repo_id,
-                CoverageFile.file_path == file_path,
-            )
-        )
-    ).scalar_one_or_none()
+    coverage_rows = await load_coverage_for_repo(
+        session, repo_id, file_paths=[file_path], include_covered_lines=False
+    )
 
     health: dict[str, Any] = {
         "score": round(metric.score, 2),
@@ -730,13 +730,8 @@ async def _resolve_health(
         "duplication_pct": metric.duplication_pct,
         "top_biomarkers": top_biomarkers,
     }
-    if coverage_row is not None:
-        health["coverage"] = {
-            "source_format": coverage_row.source_format,
-            "line_coverage_pct": coverage_row.line_coverage_pct,
-            "branch_coverage_pct": coverage_row.branch_coverage_pct,
-            "total_coverable_lines": coverage_row.total_coverable_lines,
-        }
+    if coverage_rows:
+        health["coverage"] = coverage_row_dict(coverage_rows[0], include_covered_lines=False)
     elif metric.line_coverage_pct is not None:
         health["coverage"] = {
             "line_coverage_pct": metric.line_coverage_pct,

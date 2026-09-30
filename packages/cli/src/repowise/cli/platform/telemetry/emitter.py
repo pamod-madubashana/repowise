@@ -27,12 +27,12 @@ import atexit
 import contextlib
 import json
 import os
-import subprocess
 import sys
 
 from repowise.cli.platform import identity, settings
 from repowise.cli.platform.telemetry import environment, spool
 from repowise.cli.platform.telemetry.events import TelemetryEvent
+from repowise.cli.spawn import spawn_detached
 
 #: Module the detached flusher runs as.
 _FLUSHER_MODULE = "repowise.cli.platform.telemetry.flusher"
@@ -122,36 +122,8 @@ def _spawn_flusher() -> bool:
     """
     if not sys.executable:
         return False
-    executable = _flusher_executable()
-    if not executable:
-        return False
-    kwargs: dict[str, object] = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-        "cwd": os.getcwd(),
-    }
-    if os.name == "nt":
-        # CREATE_NO_WINDOW alone: no console window flashes up
-        # in front of the user between commands. Do NOT add DETACHED_PROCESS
-        # here — Microsoft documents that CREATE_NO_WINDOW is ignored when
-        # combined with DETACHED_PROCESS, which leaves a console app with no
-        # console to inherit and Windows gives it a new visible one (the flash).
-        # A Windows child outlives its parent without DETACHED_PROCESS.
-        kwargs["creationflags"] = 0x08000000
-        try:
-            if hasattr(subprocess, "STARTUPINFO"):
-                startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
-                startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)  # type: ignore[attr-defined]
-                kwargs["startupinfo"] = startupinfo
-        except Exception:
-            pass
-    else:
-        kwargs["start_new_session"] = True
     try:
-        subprocess.Popen([executable, "-m", _FLUSHER_MODULE], **kwargs)  # type: ignore[arg-type]
+        spawn_detached([_flusher_executable(), "-m", _FLUSHER_MODULE], os.getcwd())
     except Exception:
         return False
     return True

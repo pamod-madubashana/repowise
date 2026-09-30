@@ -24,23 +24,30 @@
  */
 
 import { useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { FileCheck2 } from "lucide-react";
 import {
   DOC_DRIFT_CONFIDENCE,
   docDriftKindLabel,
+  type DocDriftFinding,
   type DocDriftResponse,
 } from "@repowise-dev/types/doc-drift";
 
 import { Skeleton } from "../ui/skeleton";
 import { ApiError } from "../shared/api-error";
 import { EmptyState } from "../shared/empty-state";
+import { CiHint } from "../shared/ci-hint";
 import { OverviewSection } from "../overview/section";
 import { toFriendlyMessage } from "../lib/errors";
+
+import { AiPromptButton } from "../health/ai-prompt-button";
+import { AiPromptModal } from "../health/ai-prompt-modal";
+import { buildDocDriftAiPrompt } from "../health/ai-prompt-builder";
 
 import { DocDriftLede } from "./doc-drift-lede";
 import { DriftFindingsTable } from "./drift-findings-table";
 import { DocDriftUnavailableState } from "./doc-drift-unavailable";
+import { DocDriftDetailPanel } from "./doc-drift-detail-panel";
 import type { DocDriftAdapter } from "./doc-drift-adapter";
 
 /**
@@ -67,12 +74,29 @@ function filterKinds(
   return [...keys].sort();
 }
 
+/**
+ * Documents for the filter, read off the same unfiltered response as the
+ * kinds. Ceiling: that response is capped at {@link FINDINGS_LIMIT}, so a
+ * document whose findings all fall past the cap is not offered.
+ */
+function filterDocuments(
+  distribution: DocDriftResponse | undefined,
+  selected: string,
+): string[] {
+  const keys = new Set((distribution?.findings ?? []).map((f) => f.file_path));
+  if (selected) keys.add(selected);
+  return [...keys].sort();
+}
+
 export function DocDriftView({
   adapter,
   renderError,
   renderLoading,
+  initialDocument,
 }: {
   adapter: DocDriftAdapter;
+  /** Open narrowed to one document, e.g. from a `?document=` deep link. */
+  initialDocument?: string | undefined;
   /** Host-specific failure card — an auth toast, a permissions notice. */
   renderError?: (error: unknown, retry: () => void) => React.ReactNode;
   /** Host-specific skeleton, for a shell that has its own loading language. */
@@ -84,23 +108,36 @@ export function DocDriftView({
     DOC_DRIFT_CONFIDENCE.MEDIUM,
   );
   const [kind, setKind] = useState<string>("");
+  const [document, setDocument] = useState<string>(initialDocument ?? "");
+  /** The finding the detail panel is describing. */
+  const [selected, setSelected] = useState<DocDriftFinding | null>(null);
+  /** The findings handed to the prompt modal; null when it is closed. */
+  const [promptFindings, setPromptFindings] = useState<DocDriftFinding[] | null>(
+    null,
+  );
 
+  // The document suffix only when set, so the unfiltered key stays the one
+  // a page-level fetch and the distribution below share.
+  const key = `doc-drift:${adapter.cacheKey}:${minConfidence}:${kind}${document ? `:${document}` : ""}`;
+  const { cache } = useSWRConfig();
   const { data, isLoading, error, mutate } = useSWR<DocDriftResponse>(
-    `doc-drift:${adapter.cacheKey}:${minConfidence}:${kind}`,
+    key,
     () =>
       adapter.listFindings({
         min_confidence: minConfidence,
         limit: FINDINGS_LIMIT,
         ...(kind ? { kind } : {}),
+        ...(document ? { document } : {}),
       }),
     { revalidateOnFocus: false, keepPreviousData: true },
   );
 
-  // The kind options come from the same query without the kind filter. When
-  // nothing is selected that is the key above, so SWR serves both from one
-  // request; only a narrowed view pays for a second.
+  // The kind and document options come from the same query without either
+  // filter. When nothing is selected that is the key above, so SWR serves both
+  // from one request; only a narrowed view pays for a second.
+  const narrowed = kind !== "" || document !== "";
   const { data: distribution } = useSWR<DocDriftResponse>(
-    kind ? `doc-drift:${adapter.cacheKey}:${minConfidence}:` : null,
+    narrowed ? `doc-drift:${adapter.cacheKey}:${minConfidence}:` : null,
     () =>
       adapter.listFindings({
         min_confidence: minConfidence,
@@ -150,8 +187,18 @@ export function DocDriftView({
   if (!summary) return null;
 
   const truncated = data.findings_emitted < summary.findings_total;
-  const kinds = filterKinds(kind ? (distribution ?? data) : data, kind);
-  const filtered = minConfidence !== DOC_DRIFT_CONFIDENCE.MEDIUM || kind !== "";
+  const unfiltered = narrowed ? (distribution ?? data) : data;
+  const kinds = filterKinds(unfiltered, kind);
+  const documents = filterDocuments(unfiltered, document);
+  const filtered = minConfidence !== DOC_DRIFT_CONFIDENCE.MEDIUM || narrowed;
+  // Also narrowed here, for a host whose server ignores `document`: its rows
+  // still match the selection even though its summary stays repo-wide. Not
+  // while `data` is the previous key's (keepPreviousData): filtering another
+  // document's rows to this one would flash an empty table.
+  const current = cache.get(key)?.data !== undefined;
+  const findings = document && current
+    ? data.findings.filter((f) => f.file_path === document)
+    : data.findings;
 
   return (
     <div className="flex flex-col gap-8">
@@ -162,23 +209,37 @@ export function DocDriftView({
       />
 
       {summary.findings_total === 0 && !filtered ? (
-        <EmptyState
-          icon={<FileCheck2 className="h-6 w-6" />}
-          title="No documentation drift found"
-          description="Every reference this detector could resolve still resolves. It re-checks on each update, so this is worth a second look after a rename or a move."
-        />
+        <div className="flex flex-col items-center gap-2">
+          <EmptyState
+            icon={<FileCheck2 className="h-6 w-6" />}
+            title="No documentation drift found"
+            description="Every reference this detector could resolve still resolves. It re-checks on each update, so this is worth a second look after a rename or a move."
+          />
+          <CiHint command="repowise doc-drift --check" checks="that every reference in the docs still resolves" />
+        </div>
       ) : (
         <OverviewSection
           title="Drifted assertions"
           description="Each row names the document to edit and the line to edit it on. It does not claim the document describes the file it names, only that the file is no longer there."
           action={
-            <Filters
-              minConfidence={minConfidence}
-              onMinConfidence={setMinConfidence}
-              kind={kind}
-              onKind={setKind}
-              kinds={kinds}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              {findings.length > 0 && (
+                <AiPromptButton
+                  onClick={() => setPromptFindings(findings)}
+                  label={`Fix ${findings.length} with an agent`}
+                />
+              )}
+              <Filters
+                minConfidence={minConfidence}
+                onMinConfidence={setMinConfidence}
+                kind={kind}
+                onKind={setKind}
+                kinds={kinds}
+                document={document}
+                onDocument={setDocument}
+                documents={documents}
+              />
+            </div>
           }
         >
           {error ? (
@@ -198,12 +259,44 @@ export function DocDriftView({
             </p>
           )}
           <DriftFindingsTable
-            findings={data.findings}
-            documentHref={adapter.documentHref}
-            navigate={adapter.navigate}
+            findings={findings}
+            onSelect={setSelected}
+            onPrompt={(finding) => setPromptFindings([finding])}
+            selectedId={selected?.id ?? null}
           />
         </OverviewSection>
       )}
+
+      <DocDriftDetailPanel
+        finding={selected}
+        onOpenChange={(open) => !open && setSelected(null)}
+        documentHref={adapter.documentHref}
+        onPrompt={(finding) => setPromptFindings([finding])}
+        navigate={adapter.navigate}
+        basis={summary.findings_basis}
+      />
+
+      <AiPromptModal
+        open={promptFindings !== null}
+        onOpenChange={(open) => !open && setPromptFindings(null)}
+        title="Documentation fix prompt"
+        description="Hand the drifted assertion, its evidence and the constraints to an agent."
+        filePath={
+          promptFindings?.length === 1
+            ? `${promptFindings[0]!.file_path}:${promptFindings[0]!.line_number}`
+            : null
+        }
+        getPrompt={
+          promptFindings
+            ? (flavor) =>
+                buildDocDriftAiPrompt({
+                  findings: promptFindings,
+                  flavor,
+                  basis: summary.findings_basis,
+                })
+            : null
+        }
+      />
     </div>
   );
 }
@@ -212,8 +305,9 @@ const SELECT_CLS =
   "h-8 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-2 text-xs text-[var(--color-text-secondary)]";
 
 /**
- * Two filters, each on its own axis: how sure the finding is, and how it was
- * found. Both go to the server so the lede's figures narrow with the rows.
+ * Three filters, each on its own axis: how sure the finding is, how it was
+ * found, and which document it is in. All go to the server so the lede's
+ * figures narrow with the rows.
  */
 function Filters({
   minConfidence,
@@ -221,12 +315,18 @@ function Filters({
   kind,
   onKind,
   kinds,
+  document,
+  onDocument,
+  documents,
 }: {
   minConfidence: number;
   onMinConfidence: (value: number) => void;
   kind: string;
   onKind: (value: string) => void;
   kinds: string[];
+  document: string;
+  onDocument: (value: string) => void;
+  documents: string[];
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -260,6 +360,27 @@ function Filters({
             {kinds.map((k) => (
               <option key={k} value={k}>
                 {docDriftKindLabel(k)}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+
+      {(documents.length > 1 || document !== "") && (
+        <>
+          <label className="sr-only" htmlFor="doc-drift-document">
+            Document
+          </label>
+          <select
+            id="doc-drift-document"
+            className={`${SELECT_CLS} max-w-[28ch] truncate`}
+            value={document}
+            onChange={(e) => onDocument(e.target.value)}
+          >
+            <option value="">All documents</option>
+            {documents.map((d) => (
+              <option key={d} value={d}>
+                {d}
               </option>
             ))}
           </select>

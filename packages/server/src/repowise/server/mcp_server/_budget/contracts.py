@@ -131,14 +131,17 @@ _CONTRACTS: dict[str, ResponseBudgetContract] = {
             # Cheapest loss first. Diff-shape context and history go before the
             # delta and the tests, so what to do survives what the diff weighs.
             "exclude_patterns",
-            "change_shape.independent_changes",
-            "change_shape",
+            "independent_changes",
+            "diff_shape",
+            "fix_history.overlap.files[]",
+            "fix_history.overlap",
             "fix_history.files[]",
             "fix_history.files",
             "fix_history",
-            "prior_fixes",
             "branch_overlap",
             "cross_repo",
+            "patch_coverage.files[]",
+            "patch_coverage",
             "impacted_tests",
             "health_delta.limits",
             "health_delta.skipped",
@@ -149,7 +152,6 @@ _CONTRACTS: dict[str, ResponseBudgetContract] = {
             "health_delta",
             "classification",
             "risk_percentile",
-            "score",
         ),
     ),
     "get_answer": ResponseBudgetContract(
@@ -266,6 +268,13 @@ _CONTRACTS: dict[str, ResponseBudgetContract] = {
             # served 0 of 40 while 73% of the budget went unspent.
             "outline.sections[]",
             "outline",
+            # Built at three rows a horizon. The quarter trims first, since the
+            # week is the nearer ask, and the totals stay until the whole block
+            # goes.
+            "next_actions.quarter.actions[]",
+            "next_actions.week.actions[]",
+            "next_actions_reason",
+            "next_actions",
             "tool_surface",
             "repos[]",
             "key_modules[]",
