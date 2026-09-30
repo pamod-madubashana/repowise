@@ -6,9 +6,11 @@ import os
 import subprocess
 from typing import IO
 
-#: DETACHED_PROCESS | CREATE_NO_WINDOW: no console window flashes up in front
-#: of the user.
-_WINDOWS_FLAGS = 0x00000008 | 0x08000000
+#: CREATE_NO_WINDOW alone: a hidden console that the child and its own console
+#: children (a venv python.exe trampoline's real interpreter, git) inherit.
+#: Never add DETACHED_PROCESS: Windows then ignores CREATE_NO_WINDOW and gives
+#: each console grandchild a new visible window (the flash in #2222).
+_WINDOWS_FLAGS = 0x08000000
 #: Leave the parent's job, so a child outlives a host that closes its job on
 #: exit. A job that forbids breakaway fails CreateProcess with access denied,
 #: and the spawn is retried inside the job.

@@ -538,10 +538,10 @@ class TestFlusherExecutable:
 class TestSpawnFlusherFlags:
     """Tests for _spawn_flusher() subprocess creation flags."""
 
-    def test_windows_popen_receives_startupinfo_with_hide_flags(
+    def test_windows_spawns_pythonw_with_create_no_window_alone(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
-        """On Windows, subprocess.Popen receives STARTUPINFO with hide flags."""
+        """On Windows, the flusher gets CREATE_NO_WINDOW without DETACHED_PROCESS."""
         monkeypatch.setattr("os.name", "nt")
         fake_python = tmp_path / "python.exe"
         fake_pythonw = tmp_path / "pythonw.exe"
@@ -549,40 +549,15 @@ class TestSpawnFlusherFlags:
         fake_pythonw.write_text("")
         monkeypatch.setattr(sys, "executable", str(fake_python))
 
-        captured_kwargs: dict = {}
+        calls: list[tuple[list[str], dict]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: calls.append((args, kw)))
 
-        class FakePopen:
-            def __init__(self, args, **kwargs):
-                captured_kwargs.update(kwargs)
-
-        monkeypatch.setattr(subprocess, "Popen", FakePopen)
-        # Inject Windows-only constants when running on Linux CI.
-        if not hasattr(subprocess, "STARTUPINFO"):
-            monkeypatch.setattr(
-                subprocess,
-                "STARTUPINFO",
-                type(
-                    "STARTUPINFO",
-                    (),
-                    {
-                        "__init__": lambda self: None,
-                        "dwFlags": 0,
-                        "wShowWindow": 0,
-                    },
-                ),
-            )
-        monkeypatch.setattr(subprocess, "STARTF_USESHOWWINDOW", 0x00000001)
-        monkeypatch.setattr(subprocess, "SW_HIDE", 0)
-
-        result = emitter._spawn_flusher()
-
-        assert result is True
-        # CREATE_NO_WINDOW alone; adding DETACHED_PROCESS would disable it.
-        assert captured_kwargs.get("creationflags") == 0x08000000
-        assert "startupinfo" in captured_kwargs
-        startupinfo = captured_kwargs["startupinfo"]
-        assert startupinfo.dwFlags & 0x00000001  # STARTF_USESHOWWINDOW
-        assert startupinfo.wShowWindow == 0  # SW_HIDE
+        assert emitter._spawn_flusher() is True
+        (args, kwargs), = calls
+        assert args[0] == str(fake_pythonw)
+        # CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB; DETACHED_PROCESS (0x8) would disable it.
+        assert kwargs["creationflags"] == 0x08000000 | 0x01000000
+        assert not kwargs["creationflags"] & 0x00000008
 
     def test_posix_uses_start_new_session(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
